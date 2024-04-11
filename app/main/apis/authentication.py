@@ -41,35 +41,69 @@ def register():
 @auth_bp.route('/login', methods=['POST'])
 def login():
     data = request.json
-    validation_result = Validators.check_login_required_fields(data)
-    if validation_result["status"] == 200:
-        username = data.get('username')
-        user = User.query.filter_by(username=username).first()
+    is_active = data.get('is_active')
+    active_user = User.query.filter_by(is_active=is_active).first()
+    if active_user == 1:
+        validation_result = Validators.check_login_required_fields(data)
+        if validation_result["status"] == 200:
+            username = data.get('username')
+            user = User.query.filter_by(username=username).first()
 
-        if not user:
-            return error_response(401, 'Invalid username or password')
+            if not user:
+                return error_response(401, 'Invalid username or password')
 
-        if not check_password_hash(user.password, data['password']):
-            user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+            if not check_password_hash(user.password, data['password']):
+                user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+                db.session.commit()
+                if user.failed_login_attempts <= 2:
+                    db.session.commit()
+                    return error_response(401, 'Invalid username or password')
+                    
+                if user.failed_login_attempts == 3:
+                    db.session.commit()
+                    return error_response(401, "you have one attempts left")
+                    
+                if user.failed_login_attempts >= 4:
+                    link = current_app.config['DEACTIVATE_ACC']
+                    reset_link = f'{link}'
+                    send_login_notification_email(user.email, reset_link)
+                    user.notification_sent = 1 
+                    db.session.commit()
+
+                    return error_response(401, '!!!Warnning!!!, mail sent to users account')
+
+            
+            user.failed_login_attempts = 0
+            user.notification_sent = 0 
             db.session.commit()
 
-            if user.failed_login_attempts > 2 and not user.notification_sent:
-                send_login_notification_email(user.email)
-                user.notification_sent = True  
-                db.session.commit()
+            access_token = create_access_token(identity=user.id)
 
-            return error_response(401, '!!!Warning!!!, mail sent to users account')
+            return jsonify(access_token=access_token), 200
+        else:
+            return jsonify(validation_result), validation_result["status"]
+    else:
+       return error_response(401, "user account is not active")
+
+@auth_bp.route('/deactivation', methods=["POST"])
+def deactivation():
+    data = request.json
+    username = data['username']
+    password = data['password']
+    is_active = data.get('is_active')
+    active_user = User.query.filter_by(is_active=is_active).first()
+
+    if active_user:
+        active_user.is_active = 0
+        db.session.commit()
+        return success_response(200, "success", "Account deactivated successfully")
+    else:
+      return error_response(401, "account not found or already deactivated")
+
+
 
         
-        user.failed_login_attempts = 0
-        user.notification_sent = False  
-        db.session.commit()
 
-        access_token = create_access_token(identity=user.id)
-
-        return jsonify(access_token=access_token), 200
-    else:
-        return jsonify(validation_result), validation_result["status"]
 
 @auth_bp.route('/forgot_password', methods=['POST'])
 def forgot_password():
@@ -114,4 +148,3 @@ def reset_password(token):
         return success_response(200, 'success','Password reset successfully')
     else:
         return error_response(404, 'User not found')
-

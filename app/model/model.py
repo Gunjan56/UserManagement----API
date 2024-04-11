@@ -12,6 +12,7 @@ class User(UserMixin, db.Model):
     is_password_changed = db.Column(db.Boolean, default=False)
     failed_login_attempts = db.Column(db.Integer, default=0)
     notification_sent = db.Column(db.Boolean, default=False)
+    is_active = db.Column(db.Boolean, default=True)
     profile_picture = db.Column(db.String(255), nullable=True)
     posts = db.relationship('Post', backref='author', lazy=True)
     role = db.Column(db.Integer, db.ForeignKey('role.id'))
