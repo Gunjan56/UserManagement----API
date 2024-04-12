@@ -41,77 +41,68 @@ def register():
 @auth_bp.route('/login', methods=['POST'])
 def login():
     data = request.json
-    is_active = data.get('is_active')
-    active_user = User.query.filter_by(is_active=is_active).first()
-    if active_user == 1:
-        validation_result = Validators.check_login_required_fields(data)
-        if validation_result["status"] == 200:
-            username = data.get('username')
-            user = User.query.filter_by(username=username).first()
+    username = data.get('username')
+    password = data.get('password')
+    
+    user = User.query.filter_by(username=username).first()
 
-            if not user:
-                return error_response(401, 'Invalid username or password')
+    if not user:
+        return error_response(401, 'Invalid username or password')
 
-            if not check_password_hash(user.password, data['password']):
-                user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+    if user.is_active == False:
+        return error_response(401, 'Account not active, please activate your account')
+
+    if not check_password_hash(user.password, password):
+        user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+        db.session.commit()
+
+        if user.failed_login_attempts <= 2:
+            db.session.commit()
+            return error_response(401, 'Invalid username or password')
+                    
+        if user.failed_login_attempts == 3:
+            db.session.commit()
+            return error_response(401, "You have one attempt left.")
+        
+        
+        if user.failed_login_attempts >= 4:
+            if user.notification_sent == False:
+                link = current_app.config['DEACTIVATE_ACC']
+                reset_link = f'{link}'
+                user.notification_sent = 1
                 db.session.commit()
-                if user.failed_login_attempts <= 2:
-                    db.session.commit()
-                    return error_response(401, 'Invalid username or password')
-                    
-                if user.failed_login_attempts == 3:
-                    db.session.commit()
-                    return error_response(401, "you have one attempts left")
-                    
-                if user.failed_login_attempts >= 4:
-                    link = current_app.config['DEACTIVATE_ACC']
-                    reset_link = f'{link}'
-                    send_login_notification_email(user.email, reset_link)
-                    user.notification_sent = 1 
-                    db.session.commit()
-
-                    return error_response(401, '!!!Warnning!!!, mail sent to users account')
-
-            
+                send_login_notification_email(user.email, reset_link)
+            return error_response(401, '!!!Warnning!!!, mail sent to users account')
+        else:
             user.failed_login_attempts = 0
             user.notification_sent = 0 
             db.session.commit()
+                    
+    access_token = create_access_token(identity=user.id)
 
-            access_token = create_access_token(identity=user.id)
+    return jsonify(access_token=access_token), 200
+    
 
-            return jsonify(access_token=access_token), 200
-        else:
-            return jsonify(validation_result), validation_result["status"]
-    else:
-       return error_response(401, "user account is not active")
-
-@auth_bp.route('/deactivation', methods=["POST"])
-def deactivation():
+@auth_bp.route('/deactivate_account', methods=['POST'])
+def deactivate_account():
     data = request.json
-    username = data['username']
-    password = data['password']
-    is_active = data.get('is_active')
-    active_user = User.query.filter_by(is_active=is_active).first()
+    email = data.get('email')
 
-    if active_user:
-        active_user.is_active = 0
+    user = User.query.filter_by(email=email).first()
+
+    if user:
+        user.is_active = False
         db.session.commit()
-        return success_response(200, "success", "Account deactivated successfully")
+
+        return success_response(200, 'success', 'Account deactivated successfully')
     else:
-      return error_response(401, "account not found or already deactivated")
-
-
-
-        
-
+        return error_response(404, 'User not found')
 
 @auth_bp.route('/forgot_password', methods=['POST'])
 def forgot_password():
     data = request.get_json()
     email = data['email']
-    is_password_changed = data.get('is_password_changed')
     user = User.query.filter_by(email=email).first()
-    is_password_changed = User.query.filter_by(is_password_changed=is_password_changed).first()
 
     if user:
         reset_token = base64.b64encode(email.encode('utf-8')).decode('utf-8')
@@ -122,7 +113,6 @@ def forgot_password():
         db.session.commit()
 
         return success_response(201, 'success', 'Reset password link sent to your email')
-
     else:
         return error_response(404, 'User not found')
 
@@ -131,20 +121,21 @@ def reset_password(token):
     data = request.get_json()
     new_password = data['new_password']
     confirm_password = data['confirm_password']
-    is_password_changed = data.get('is_password_changed')
 
     if new_password != confirm_password:
         return error_response(400, 'New password and confirm password do not match')
 
     email = base64.b64decode(token).decode('utf-8')
-    is_password_changed = User.query.filter_by(is_password_changed=is_password_changed).first()
     user = User.query.filter_by(email=email).first()
-    if user.is_password_changed == True:
-        return error_response(400, "link expired or used wait for sometime to generate new link")
-    if user:
-        user.password = generate_password_hash(new_password)
-        user.is_password_changed = True
-        db.session.commit()
-        return success_response(200, 'success','Password reset successfully')
-    else:
+
+    if not user:
         return error_response(404, 'User not found')
+
+    if not user.is_password_changed:
+        return error_response(400, "Link expired or used. Please wait for some time to generate a new link")
+
+    user.password = generate_password_hash(new_password)
+    user.is_password_changed = True
+    db.session.commit()
+
+    return success_response(200, 'success','Password reset successfully')
